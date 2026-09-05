@@ -29,19 +29,15 @@ FANTASYPROS_API_KEY = os.environ["FANTASYPROS_API_KEY"]
 # (based on FantasyPros consensus ECR). Adjust to taste — wider leagues
 # or superflex formats may want higher numbers, especially for QB.
 POSITION_LIMITS = {
-    "QB": 32,
-    "RB": 60,
-    "WR": 80,
-    "TE": 32,
-    "K": 32,
-    "DST": 32,
+    "QB": 18,
+    "RB": 50,
+    "WR": 60,
+    "TE": 18,
+    "K": 4,
+    "DST": 0,
 }
 SCORING = os.environ.get("FP_SCORING", "PPR")  # STD, PPR, or HALF
 RANKINGS_MAX_AGE_HOURS = int(os.environ.get("FP_RANKINGS_MAX_AGE_HOURS", "20"))
-
-# Bluesky
-BLUESKY_HANDLE = os.environ.get("BLUESKY_HANDLE")
-BLUESKY_APP_PASSWORD = os.environ.get("BLUESKY_APP_PASSWORD")
 
 # Facebook Page
 FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID")
@@ -49,12 +45,6 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN")
 
 # Discord
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-
-# X (optional — add these secrets later if/when you get X API credits)
-X_API_KEY = os.environ.get("X_API_KEY")
-X_API_SECRET = os.environ.get("X_API_SECRET")
-X_ACCESS_TOKEN = os.environ.get("X_ACCESS_TOKEN")
-X_ACCESS_SECRET = os.environ.get("X_ACCESS_SECRET")
 
 SEEN_IDS_PATH = Path(__file__).parent / "seen_ids.json"
 MAX_SEEN_IDS_KEPT = 1000  # trim the file so it doesn't grow forever
