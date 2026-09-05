@@ -1,0 +1,3 @@
+requests>=2.31
+atproto>=0.0.55
+tweepy>=4.14
