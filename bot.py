@@ -29,12 +29,10 @@ FANTASYPROS_API_KEY = os.environ["FANTASYPROS_API_KEY"]
 # (based on FantasyPros consensus ECR). Adjust to taste — wider leagues
 # or superflex formats may want higher numbers, especially for QB.
 POSITION_LIMITS = {
-    "QB": 18,
-    "RB": 50,
-    "WR": 60,
-    "TE": 18,
-    "K": 4,
-    "DST": 0,
+    "QB": 32,
+    "RB": 60,
+    "WR": 80,
+    "TE": 32,
 }
 SCORING = os.environ.get("FP_SCORING", "PPR")  # STD, PPR, or HALF
 RANKINGS_MAX_AGE_HOURS = int(os.environ.get("FP_RANKINGS_MAX_AGE_HOURS", "20"))
@@ -71,30 +69,30 @@ FACEBOOK_GRAPH_VERSION = "v21.0"
 # ---------- Relevant player filtering ----------
 
 def fetch_relevant_player_ids() -> set:
-    """Pulls consensus rankings and returns the set of player_ids that
-    fall within POSITION_LIMITS for their position."""
+    """Pulls consensus rankings, one call per position (the API doesn't
+    accept position=ALL), and returns the player_ids ranked within
+    POSITION_LIMITS for their position."""
     season = datetime.utcnow().year
-    resp = requests.get(
-        RANKINGS_URL_TMPL.format(sport=SPORT, season=season),
-        headers={"x-api-key": FANTASYPROS_API_KEY},
-        params={"position": "ALL", "scoring": SCORING},
-        timeout=30,
-    )
-    if not resp.ok:
-        print(f"Rankings request failed ({resp.status_code}): {resp.text}", file=sys.stderr)
-    resp.raise_for_status()
-    players = resp.json().get("players", [])
-
     relevant_ids = set()
-    for p in players:
-        pos_rank = p.get("pos_rank", "")  # e.g. "RB12"
-        match = re.match(r"([A-Z]+)(\d+)", pos_rank or "")
-        if not match:
-            continue
-        position, rank = match.group(1), int(match.group(2))
-        limit = POSITION_LIMITS.get(position)
-        if limit and rank <= limit:
+
+    for position, limit in POSITION_LIMITS.items():
+        resp = requests.get(
+            RANKINGS_URL_TMPL.format(sport=SPORT, season=season),
+            headers={"x-api-key": FANTASYPROS_API_KEY},
+            params={"position": position, "scoring": SCORING},
+            timeout=30,
+        )
+        if not resp.ok:
+            print(f"Rankings request failed for {position} ({resp.status_code}): {resp.text}", file=sys.stderr)
+        resp.raise_for_status()
+        players = resp.json().get("players", [])
+
+        # Sort by ECR ascending (best players first) and take the top N
+        # for this position, regardless of the order the API returns.
+        players.sort(key=lambda p: float(p.get("rank_ecr", 9999)))
+        for p in players[:limit]:
             relevant_ids.add(str(p.get("player_id")))
+
     return relevant_ids
 
 
