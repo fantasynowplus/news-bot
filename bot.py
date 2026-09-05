@@ -178,19 +178,35 @@ def post_to_bluesky(item: dict):
 
     title = item.get("title", "").strip()
     link = item.get("link", "").strip()
+    impact = (item.get("impact") or "").strip()
+    category = (item.get("category") or "").strip().lower()
+    emoji = CATEGORY_EMOJI.get(category, "📰")
 
     # 300 grapheme limit on Bluesky; leave a little headroom.
     max_len = 295
+    reserved_link = len(link) + 1 if link else 0
+
+    header = f"{emoji} {title}".strip()
+    if len(header) > max_len - reserved_link:
+        header = header[: max(max_len - reserved_link - 1, 0)].rstrip() + "…"
+
+    body_parts = [header]
+    used = len(header)
+    if impact:
+        remaining = max_len - used - reserved_link - 2  # 2 chars for the blank line
+        if remaining > 20:  # not worth including a sliver of a sentence
+            snippet = impact
+            if len(snippet) > remaining:
+                snippet = snippet[: remaining - 1].rstrip() + "…"
+            body_parts.append(snippet)
+
+    text_body = "\n\n".join(body_parts)
 
     if link:
-        room_for_title = max_len - len(link) - 1
-        display_title = title
-        if len(display_title) > room_for_title:
-            display_title = display_title[: max(room_for_title - 1, 0)].rstrip() + "…"
-        builder = client_utils.TextBuilder().text(f"{display_title} ").link(link, link)
+        builder = client_utils.TextBuilder().text(f"{text_body} ").link(link, link)
         client.send_post(builder)
     else:
-        client.send_post(text=format_post_text(item, max_len=max_len))
+        client.send_post(text=text_body)
 
 
 # ---------- Facebook Page ----------
