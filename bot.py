@@ -80,6 +80,8 @@ def fetch_relevant_player_ids() -> set:
         params={"position": "ALL", "scoring": SCORING},
         timeout=30,
     )
+    if not resp.ok:
+        print(f"Rankings request failed ({resp.status_code}): {resp.text}", file=sys.stderr)
     resp.raise_for_status()
     players = resp.json().get("players", [])
 
