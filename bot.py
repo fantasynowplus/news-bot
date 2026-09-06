@@ -64,6 +64,7 @@ RANKINGS_URL_TMPL = (
     "https://api.fantasypros.com/public/v2/json/{sport}/{season}/consensus-rankings"
 )
 FACEBOOK_GRAPH_VERSION = "v21.0"
+ESPN_RSS_URL = "https://www.espn.com/espn/rss/nfl/news"
 
 
 # ---------- Relevant player filtering ----------
@@ -147,6 +148,57 @@ def save_seen_ids(seen_ids: set):
     trimmed = list(seen_ids)[-MAX_SEEN_IDS_KEPT:]
     with open(SEEN_IDS_PATH, "w") as f:
         json.dump(trimmed, f)
+
+
+# ---------- ESPN RSS ----------
+
+def classify_espn_category(title: str, summary: str) -> str:
+    text = f"{title} {summary}".lower()
+    if any(k in text for k in ["questionable", "doubtful", "out for", "injury", "injured", "surgery"]):
+        return "injury"
+    if any(k in text for k in ["trade", "sign", "waive", "release", "activate", "promote"]):
+        return "transaction"
+    return "breaking"
+
+
+def fetch_espn_news() -> list:
+    """Pulls ESPN's NFL news RSS feed and normalizes entries to the same
+    shape as FantasyPros news items, so they can flow through the same
+    posting code. ESPN doesn't give a player_id or category, so those
+    get filled in with a text-based guess."""
+    import feedparser
+
+    feed = feedparser.parse(ESPN_RSS_URL)
+    items = []
+    for entry in feed.entries:
+        title = entry.get("title", "").strip()
+        link = entry.get("link", "").strip()
+        guid = entry.get("id") or link
+        summary = entry.get("summary", "").strip()
+        items.append({
+            "id": f"espn:{guid}",
+            "title": title,
+            "link": link,
+            "impact": summary,
+            "category": classify_espn_category(title, summary),
+            "team_id": "",
+            "created": entry.get("published", ""),
+        })
+    return items
+
+
+def find_mentioned_players(text: str, players: dict) -> list:
+    lower_text = text.lower()
+    return [name for name in players.values() if name and name.lower() in lower_text]
+
+
+def filter_by_player_mentions(items: list, players: dict) -> list:
+    matched = []
+    for item in items:
+        text = f"{item.get('title', '')} {item.get('impact', '')}"
+        if find_mentioned_players(text, players):
+            matched.append(item)
+    return matched
 
 
 def format_post_text(item: dict, max_len: int) -> str:
@@ -283,84 +335,4 @@ def post_to_discord(item: dict):
         try:
             dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
             embed["timestamp"] = dt.isoformat() + "Z"
-        except ValueError:
-            pass  # timestamp is optional; skip if the format doesn't parse
-
-    resp = requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]}, timeout=30)
-    if not resp.ok:
-        raise RuntimeError(f"Discord webhook error {resp.status_code}: {resp.text}")
-
-
-# ---------- X ----------
-
-def x_configured() -> bool:
-    return all([X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET])
-
-
-def post_to_x(item: dict):
-    import tweepy
-
-    client = tweepy.Client(
-        consumer_key=X_API_KEY,
-        consumer_secret=X_API_SECRET,
-        access_token=X_ACCESS_TOKEN,
-        access_token_secret=X_ACCESS_SECRET,
-    )
-    text = format_post_text(item, max_len=280)
-    client.create_tweet(text=text)
-
-
-# ---------- Main ----------
-
-DESTINATIONS = [
-    ("bluesky", bluesky_configured, post_to_bluesky),
-    ("facebook", facebook_configured, post_to_facebook),
-    ("discord", discord_configured, post_to_discord),
-    ("x", x_configured, post_to_x),
-]
-
-
-def main():
-    active = [name for name, configured, _ in DESTINATIONS if configured()]
-    if not active:
-        print("No destination credentials configured — nothing to do.", file=sys.stderr)
-    else:
-        print(f"Active destinations: {', '.join(active)}")
-
-    seen_ids = load_seen_ids()
-    relevant_player_ids = set(load_relevant_players().keys())
-    items = fetch_news()
-
-    relevant_items = [
-        i for i in items if str(i.get("player_id")) in relevant_player_ids
-    ]
-    new_items = [i for i in relevant_items if str(i.get("id")) not in seen_ids]
-    print(
-        f"Fetched {len(items)} items, {len(relevant_items)} about relevant "
-        f"players, {len(new_items)} are new."
-    )
-
-    for item in new_items:
-        item_id = str(item.get("id"))
-        title = item.get("title", "(no title)")
-
-        posted_anywhere = False
-
-        for name, configured, post_fn in DESTINATIONS:
-            if not configured():
-                continue
-            try:
-                post_fn(item)
-                print(f"[{name}] posted: {title}")
-                posted_anywhere = True
-            except Exception as e:
-                print(f"[{name}] FAILED on '{title}': {e}", file=sys.stderr)
-
-        if posted_anywhere:
-            seen_ids.add(item_id)
-
-    save_seen_ids(seen_ids)
-
-
-if __name__ == "__main__":
-    main()
+        except
