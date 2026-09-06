@@ -172,19 +172,20 @@ def fetch_espn_news() -> list:
     tends to silently block/empty-response generic library user agents,
     especially from shared datacenter IPs like GitHub Actions runners."""
     import feedparser
-
+    
     resp = requests.get(
         ESPN_RSS_URL,
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
         timeout=30,
     )
+    print(f"ESPN RSS HTTP {resp.status_code}, {len(resp.content)} bytes", file=sys.stderr)
     if not resp.ok:
-        print(f"ESPN RSS request failed ({resp.status_code})", file=sys.stderr)
         resp.raise_for_status()
 
     feed = feedparser.parse(resp.content)
+    print(f"ESPN RSS parsed: bozo={feed.bozo}, {len(feed.entries)} entries", file=sys.stderr)
     if feed.bozo:
-        print(f"ESPN RSS parsed with warnings: {feed.get('bozo_exception')}", file=sys.stderr)
+        print(f"ESPN RSS parse warning: {feed.get('bozo_exception')}", file=sys.stderr)
 
     items = []
     for entry in feed.entries:
