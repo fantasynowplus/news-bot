@@ -37,22 +37,22 @@ POSITION_LIMITS = {
 SCORING = os.environ.get("FP_SCORING", "PPR")  # STD, PPR, or HALF
 RANKINGS_MAX_AGE_HOURS = int(os.environ.get("FP_RANKINGS_MAX_AGE_HOURS", "20"))
 
+# Bluesky
+BLUESKY_HANDLE = os.environ.get("BLUESKY_HANDLE")
+BLUESKY_APP_PASSWORD = os.environ.get("BLUESKY_APP_PASSWORD")
+
 # Facebook Page
 FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID")
 FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN")
+
+# Discord
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 # X (optional — add these secrets later if/when you get X API credits)
 X_API_KEY = os.environ.get("X_API_KEY")
 X_API_SECRET = os.environ.get("X_API_SECRET")
 X_ACCESS_TOKEN = os.environ.get("X_ACCESS_TOKEN")
 X_ACCESS_SECRET = os.environ.get("X_ACCESS_SECRET")
-
-# Bluesky
-BLUESKY_HANDLE = os.environ.get("BLUESKY_HANDLE")
-BLUESKY_APP_PASSWORD = os.environ.get("BLUESKY_APP_PASSWORD")
-
-# Discord
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 SEEN_IDS_PATH = Path(__file__).parent / "seen_ids.json"
 MAX_SEEN_IDS_KEPT = 1000  # trim the file so it doesn't grow forever
@@ -68,12 +68,12 @@ FACEBOOK_GRAPH_VERSION = "v21.0"
 
 # ---------- Relevant player filtering ----------
 
-def fetch_relevant_player_ids() -> set:
+def fetch_relevant_players() -> dict:
     """Pulls consensus rankings, one call per position (the API doesn't
-    accept position=ALL), and returns the player_ids ranked within
-    POSITION_LIMITS for their position."""
+    accept position=ALL), and returns {player_id: player_name} for
+    players ranked within POSITION_LIMITS for their position."""
     season = datetime.utcnow().year
-    relevant_ids = set()
+    relevant = {}
 
     for position, limit in POSITION_LIMITS.items():
         resp = requests.get(
@@ -91,33 +91,33 @@ def fetch_relevant_player_ids() -> set:
         # for this position, regardless of the order the API returns.
         players.sort(key=lambda p: float(p.get("rank_ecr", 9999)))
         for p in players[:limit]:
-            relevant_ids.add(str(p.get("player_id")))
+            relevant[str(p.get("player_id"))] = p.get("player_name", "")
 
-    return relevant_ids
+    return relevant
 
 
-def load_relevant_player_ids() -> set:
-    """Returns cached relevant player IDs, refreshing from the API if the
-    cache is missing or older than RANKINGS_MAX_AGE_HOURS."""
+def load_relevant_players() -> dict:
+    """Returns cached {player_id: player_name}, refreshing from the API
+    if the cache is missing or older than RANKINGS_MAX_AGE_HOURS."""
     if RELEVANT_PLAYERS_PATH.exists():
         with open(RELEVANT_PLAYERS_PATH) as f:
             cache = json.load(f)
         age_hours = (time.time() - cache.get("fetched_at", 0)) / 3600
         if age_hours < RANKINGS_MAX_AGE_HOURS:
-            return set(cache.get("player_ids", []))
+            return cache.get("players", {})
 
     try:
-        ids = fetch_relevant_player_ids()
+        players = fetch_relevant_players()
     except Exception as e:
         print(f"Failed to refresh rankings, falling back to stale/no cache: {e}", file=sys.stderr)
         if RELEVANT_PLAYERS_PATH.exists():
             with open(RELEVANT_PLAYERS_PATH) as f:
-                return set(json.load(f).get("player_ids", []))
-        return set()
+                return json.load(f).get("players", {})
+        return {}
 
     with open(RELEVANT_PLAYERS_PATH, "w") as f:
-        json.dump({"fetched_at": time.time(), "player_ids": sorted(ids)}, f)
-    return ids
+        json.dump({"fetched_at": time.time(), "players": players}, f)
+    return players
 
 
 # ---------- FantasyPros news ----------
@@ -234,13 +234,59 @@ def post_to_facebook(item: dict):
 
 # ---------- Discord ----------
 
+CATEGORY_COLORS = {
+    "injury": 0xE74C3C,      # red
+    "breaking": 0xF1C40F,    # gold
+    "rumor": 0x9B59B6,       # purple
+    "transaction": 0x2ECC71, # green
+    "recap": 0x3498DB,       # blue
+}
+CATEGORY_EMOJI = {
+    "injury": "🚨",
+    "breaking": "⚡",
+    "rumor": "🔍",
+    "transaction": "🔄",
+    "recap": "📋",
+}
+DEFAULT_EMBED_COLOR = 0x95A5A6  # gray fallback for unknown categories
+
+
 def discord_configured() -> bool:
     return bool(DISCORD_WEBHOOK_URL)
 
 
 def post_to_discord(item: dict):
-    text = format_post_text(item, max_len=1900)  # Discord's limit is 2000
-    resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": text}, timeout=30)
+    title = item.get("title", "(no title)").strip()
+    link = item.get("link", "").strip()
+    impact = (item.get("impact") or "").strip()
+    category = (item.get("category") or "").strip().lower()
+    team = (item.get("team_id") or "").strip()
+
+    emoji = CATEGORY_EMOJI.get(category, "📰")
+    color = CATEGORY_COLORS.get(category, DEFAULT_EMBED_COLOR)
+
+    embed = {
+        "title": f"{emoji} {title}"[:256],
+        "color": color,
+    }
+    if link:
+        embed["url"] = link
+    if impact:
+        embed["description"] = impact[:4000]
+
+    footer_bits = [b for b in [category.capitalize(), team] if b]
+    if footer_bits:
+        embed["footer"] = {"text": " • ".join(footer_bits)}
+
+    created = item.get("created")
+    if created:
+        try:
+            dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+            embed["timestamp"] = dt.isoformat() + "Z"
+        except ValueError:
+            pass  # timestamp is optional; skip if the format doesn't parse
+
+    resp = requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]}, timeout=30)
     if not resp.ok:
         raise RuntimeError(f"Discord webhook error {resp.status_code}: {resp.text}")
 
@@ -282,7 +328,7 @@ def main():
         print(f"Active destinations: {', '.join(active)}")
 
     seen_ids = load_seen_ids()
-    relevant_player_ids = load_relevant_player_ids()
+    relevant_player_ids = set(load_relevant_players().keys())
     items = fetch_news()
 
     relevant_items = [
