@@ -165,10 +165,27 @@ def fetch_espn_news() -> list:
     """Pulls ESPN's NFL news RSS feed and normalizes entries to the same
     shape as FantasyPros news items, so they can flow through the same
     posting code. ESPN doesn't give a player_id or category, so those
-    get filled in with a text-based guess."""
+    get filled in with a text-based guess.
+
+    Fetches with `requests` (rather than letting feedparser make its
+    own request) so we can send a browser-like User-Agent — ESPN's CDN
+    tends to silently block/empty-response generic library user agents,
+    especially from shared datacenter IPs like GitHub Actions runners."""
     import feedparser
 
-    feed = feedparser.parse(ESPN_RSS_URL)
+    resp = requests.get(
+        ESPN_RSS_URL,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        timeout=30,
+    )
+    if not resp.ok:
+        print(f"ESPN RSS request failed ({resp.status_code})", file=sys.stderr)
+        resp.raise_for_status()
+
+    feed = feedparser.parse(resp.content)
+    if feed.bozo:
+        print(f"ESPN RSS parsed with warnings: {feed.get('bozo_exception')}", file=sys.stderr)
+
     items = []
     for entry in feed.entries:
         title = entry.get("title", "").strip()
