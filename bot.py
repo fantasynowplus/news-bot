@@ -335,4 +335,95 @@ def post_to_discord(item: dict):
         try:
             dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
             embed["timestamp"] = dt.isoformat() + "Z"
-        except
+        except ValueError:
+            pass  # timestamp is optional; skip if the format doesn't parse
+
+    resp = requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]}, timeout=30)
+    if not resp.ok:
+        raise RuntimeError(f"Discord webhook error {resp.status_code}: {resp.text}")
+
+
+# ---------- X ----------
+
+def x_configured() -> bool:
+    return all([X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET])
+
+
+def post_to_x(item: dict):
+    import tweepy
+
+    client = tweepy.Client(
+        consumer_key=X_API_KEY,
+        consumer_secret=X_API_SECRET,
+        access_token=X_ACCESS_TOKEN,
+        access_token_secret=X_ACCESS_SECRET,
+    )
+    text = format_post_text(item, max_len=280)
+    client.create_tweet(text=text)
+
+
+# ---------- Main ----------
+
+DESTINATIONS = [
+    ("bluesky", bluesky_configured, post_to_bluesky),
+    ("facebook", facebook_configured, post_to_facebook),
+    ("discord", discord_configured, post_to_discord),
+    ("x", x_configured, post_to_x),
+]
+
+
+def main():
+    active = [name for name, configured, _ in DESTINATIONS if configured()]
+    if not active:
+        print("No destination credentials configured — nothing to do.", file=sys.stderr)
+    else:
+        print(f"Active destinations: {', '.join(active)}")
+
+    seen_ids = load_seen_ids()
+    relevant_players = load_relevant_players()
+    relevant_player_ids = set(relevant_players.keys())
+
+    fp_items = fetch_news()
+    fp_relevant = [
+        i for i in fp_items if str(i.get("player_id")) in relevant_player_ids
+    ]
+
+    espn_items = []
+    try:
+        espn_items = fetch_espn_news()
+    except Exception as e:
+        print(f"Failed to fetch ESPN RSS: {e}", file=sys.stderr)
+    espn_relevant = filter_by_player_mentions(espn_items, relevant_players)
+
+    all_relevant = fp_relevant + espn_relevant
+    new_items = [i for i in all_relevant if str(i.get("id")) not in seen_ids]
+    print(
+        f"FantasyPros: {len(fp_items)} fetched, {len(fp_relevant)} relevant. "
+        f"ESPN: {len(espn_items)} fetched, {len(espn_relevant)} relevant. "
+        f"{len(new_items)} total new."
+    )
+
+    for item in new_items:
+        item_id = str(item.get("id"))
+        title = item.get("title", "(no title)")
+
+        posted_anywhere = False
+
+        for name, configured, post_fn in DESTINATIONS:
+            if not configured():
+                continue
+            try:
+                post_fn(item)
+                print(f"[{name}] posted: {title}")
+                posted_anywhere = True
+            except Exception as e:
+                print(f"[{name}] FAILED on '{title}': {e}", file=sys.stderr)
+
+        if posted_anywhere:
+            seen_ids.add(item_id)
+
+    save_seen_ids(seen_ids)
+
+
+if __name__ == "__main__":
+    main()
